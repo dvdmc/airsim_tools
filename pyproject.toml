@@ -1,0 +1,16 @@
+[project]
+name = "airsim_tools"
+version = "0.1.0"
+
+dependencies=[
+    "numpy",
+    "matplotlib",
+    "Pillow",
+    "msgpack-rpc-python",
+    "airsim",
+    "tyro",
+]
+
+# black
+[tool.black]
+line-length = 120
