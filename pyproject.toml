@@ -1,7 +1,13 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "airsim_tools"
+authors = [{name = "David Morilla-Cabello", email = "davidmc@unizar.es"}]
+readme="README.md"
+requires-python=">=3.7.0"
 version = "0.1.0"
-
 dependencies=[
     "numpy",
     "matplotlib",
@@ -11,6 +17,11 @@ dependencies=[
     "tyro",
 ]
 
+[tool.setuptools]
+packages = ["airsim_tools"]
+
 # black
 [tool.black]
 line-length = 120
+
+
