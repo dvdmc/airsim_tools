@@ -6,13 +6,13 @@ from PIL import Image
 import airsim
 
 import numpy as np
-from phd_utils.airsim.depth_conversion import depth_conversion
-from phd_utils.airsim.semantics import airsim2class_id
+from airsim_tools.depth_conversion import depth_conversion
+from airsim_tools.semantics import airsim2class_id
 
-from phd_utils.poses.frame_converter import FrameConverter
+from poses_tools.frame_converter import FrameConverter
 
-from phd_utils.airsim.trajectory_functions import *
-from phd_utils.airsim.data_saver import ColmapDataSave, SaveData
+from airsim_tools.trajectory_functions import *
+from airsim_tools.data_saver import NerfstudioDataSave, SaveData
 
 
 @dataclass
@@ -99,10 +99,10 @@ class AirsimSaverConfig:
     orientation_transform: Optional[float] = None
     # Initial orientation of the poses in AirSim coordinates. It indicates the map orientation.
 
-    save_format: Literal["ros", "colmap"] = "colmap"
+    save_format: Literal["ros", "nerfstudio"] = "nerfstudio"
     # Format to save the data and frame of reference for the poses.
     # - "ros": save the data in the format used by ROS.
-    # - "colmap": save the data in the format used by COLMAP.
+    # - "nerfstudio": save the data in the format used by nerfstudio.
 
     semantic_map: Optional[Path] = None
     # Path to the semantic map.
@@ -136,8 +136,8 @@ class AirsimSaver:
         """
         Get the saver to save the data.
         """
-        if self.config.save_format == "colmap":
-            return ColmapDataSave(self.dataset_directory, self.camera_params.to_dict())
+        if self.config.save_format == "nerfstudio":
+            return NerfstudioDataSave(self.dataset_directory, self.camera_params.to_dict())
         else:
             raise NotImplementedError
 
