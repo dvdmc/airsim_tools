@@ -1,7 +1,7 @@
 import numpy as np
 
 # TODO: Change to semantics repo approach
-def get_airsim_labels(bgr=False):
+def get_airsim_labels(bgr: bool = False) -> np.ndarray:
 
     color_map = np.array(
         [
@@ -32,7 +32,7 @@ def get_airsim_labels(bgr=False):
         color_map = color_map[:, ::-1]
     return color_map
 
-def get_airsim_labels2(bgr=False):
+def get_airsim_labels2(bgr: bool = False) -> np.ndarray:
 
     color_map = np.array(
         [
@@ -50,7 +50,7 @@ def get_airsim_labels2(bgr=False):
         color_map = color_map[:, ::-1]
     return color_map
 
-def airsim2class_id(img):
+def airsim2class_id(img: np.ndarray, bgr:bool =False) -> np.ndarray:
     """Convert AirSim color format to class id.
     Args:
         img (np.array): Image in AirSim color format.
@@ -58,12 +58,12 @@ def airsim2class_id(img):
         np.array: Image in class id format.
     """
     labels = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
-    for i, color in enumerate(get_airsim_labels(bgr=True)):
+    for i, color in enumerate(get_airsim_labels(bgr=bgr)):
         labels[np.all(img == color, axis=2)] = i
 
     return labels
 
-def airsim2class_id2(img):
+def airsim2class_id2(img: np.ndarray, bgr:bool =False) -> np.ndarray:
     """Convert AirSim color format to class id VARIATION BECAUSE OF SOME BUG.
     Args:
         img (np.array): Image in AirSim color format.
@@ -71,7 +71,7 @@ def airsim2class_id2(img):
         np.array: Image in class id format.
     """
     labels = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
-    for i, color in enumerate(get_airsim_labels2(bgr=True)):
+    for i, color in enumerate(get_airsim_labels2(bgr=bgr)):
         labels[np.all(img == color, axis=2)] = i
 
     return labels
