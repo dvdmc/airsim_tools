@@ -2,7 +2,7 @@ from typing import List, Tuple
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from phd_utils.poses.frame_converter import FrameConverter
+from poses_tools.conversions import spherical_to_cartesian
 
 class BasePosesFunction:
     def __init__(self) -> None:
@@ -128,7 +128,7 @@ class SphericalPosesFunction(BasePosesFunction):
                 for theta in self.theta: # angle from z axis to x-y plane
                     theta_rad = np.deg2rad(theta)
                     phi_rad = np.deg2rad(phi)
-                    translation, rotation = FrameConverter.spherical_to_cartesian(r, theta_rad, phi_rad)
+                    translation, rotation = spherical_to_cartesian(r, theta_rad, phi_rad)
                     
                     translations.append(translation)
                     rotations.append(rotation)
@@ -148,6 +148,6 @@ class SphericalPosesFunction(BasePosesFunction):
                 translation: translation
                 rotation: rotation
         """
-        t, rot = FrameConverter.spherical_to_cartesian(radius, theta, phi)
+        t, rot = spherical_to_cartesian(radius, theta, phi)
 
         return t, rot

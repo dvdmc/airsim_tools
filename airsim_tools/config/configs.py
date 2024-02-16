@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 
-from phd_utils.airsim_tools.save_dataset import AirsimSaverConfig
+from airsim_tools.save_dataset import AirsimSaverConfig
 
 
 # Coordinates in Unreal with -z and m instead of cm. Then, transformed to standard coordinates.
@@ -14,10 +14,10 @@ config = AirsimSaverConfig(
     name="airsim",
     mode="from_function",
     function="spherical",
-    function_parameters={"radius": np.arange(1, 2, 1), "theta": np.arange(10,90,20), "phi": np.arange(0, 360, 30)},
+    function_parameters={"radius": np.arange(1, 2, 1), "theta": np.arange(5,90,5), "phi": np.arange(0, 360, 10)},
     cameras=["0"],
     sensors=["poses", "rgb", "depth", "semantic"],
-    save_format="colmap",
+    save_format="nerfstudio",
     origin_transform=np.array(base_pose),
     orientation_transform=180,
     semantic_map=None,
