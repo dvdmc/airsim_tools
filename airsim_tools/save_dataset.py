@@ -3,17 +3,26 @@ from pathlib import Path
 import time
 from typing import Callable, List, Literal, Optional
 from PIL import Image
-import airsim
+from tqdm import tqdm
+import airsim  # type: ignore
 
 import numpy as np
 from airsim_tools.depth_conversion import depth_conversion
-from airsim_tools.semantics import airsim2class_id
+from airsim_tools.semantics import get_airsim_labels, rgb2label
 
-from poses_tools.frame_converter import FrameConverter
+from poses_tools.frame_converter import FrameConverter  # type: ignore
 
 from airsim_tools.trajectory_functions import *
-from airsim_tools.data_saver import NerfstudioDataSave, SaveData
+from airsim_tools.data_saver import NerfstudioDataSave, SaveData, ScanNetDataSave
 
+AirsimSensorDataTypes = Literal["rgb", "depth", "semantic", "pose"]
+"""
+    List of sensor data to query.
+    - "pose": query poses.
+    - "rgb": query rgb images.
+    - "depth": query depth images.
+    - "semantic": query semantic images.
+"""
 
 @dataclass
 class CameraParams:
@@ -84,10 +93,10 @@ class AirsimSaverConfig:
     cameras: List[str] = field(default_factory=list, metadata={"default": ["0"]})
     # List of cameras to save.
 
-    sensors: List[Literal["poses", "rgb", "depth", "semantic", "lidar"]] = field(
+    data_types: List[AirsimSensorDataTypes] = field(
         default_factory=list, metadata={"default": ["poses", "rgb", "depth", "semantic"]}
     )
-    # List of sensors to save.
+    # List of data_types to save.
     # - "poses": save the poses.
     # - "rgb": save the rgb images.
     # - "depth": save the depth images.
@@ -99,7 +108,7 @@ class AirsimSaverConfig:
     orientation_transform: Optional[float] = None
     # Initial orientation of the poses in AirSim coordinates. It indicates the map orientation.
 
-    save_format: Literal["ros", "nerfstudio"] = "nerfstudio"
+    save_format: Literal["scannet", "nerfstudio"] = "nerfstudio"
     # Format to save the data and frame of reference for the poses.
     # - "ros": save the data in the format used by ROS.
     # - "nerfstudio": save the data in the format used by nerfstudio.
@@ -107,27 +116,29 @@ class AirsimSaverConfig:
     semantic_map: Optional[Path] = None
     # Path to the semantic map.
 
-    semantic_config: Optional[List[Tuple[str, int]]] = None
+    semantic_config: List[List] = field(default_factory=list, metadata={"default": []})
     # Configuration for the semantic labels.
     # The tuple should contain the substring of the objects to configure
     # and the label to assign to them.
 
+    poses_file: Optional[Path] = None
+    # Path to the file where the poses will loaded in the case of "from_poses" mode.
 
 class AirsimSaver:
     """
     Saves data from AirSim.
     """
 
-    def __init__(self, config: AirsimSaverConfig):
-        self.config = config
+    def __init__(self, cfg: AirsimSaverConfig):
+        self.cfg = cfg
 
     def _get_function(self):
         """
         Get the function to generate the poses.
         """
-        if self.config.function == "spherical":
+        if self.cfg.function == "spherical":
             # Apply directly the named function parameters
-            return SphericalPosesFunction(**self.config.function_parameters)
+            return SphericalPosesFunction(**self.cfg.function_parameters)
             # return DummyPosesFunction()
         else:
             raise NotImplementedError
@@ -136,8 +147,10 @@ class AirsimSaver:
         """
         Get the saver to save the data.
         """
-        if self.config.save_format == "nerfstudio":
+        if self.cfg.save_format == "nerfstudio":
             return NerfstudioDataSave(self.dataset_directory, self.camera_params.to_dict())
+        elif self.cfg.save_format == "scannet":
+            return ScanNetDataSave(str(self.cfg.name), self.dataset_directory, self.camera_params.to_dict())
         else:
             raise NotImplementedError
 
@@ -147,14 +160,14 @@ class AirsimSaver:
         """
         self.frame_converter = FrameConverter()
         self.frame_converter.setup_from_yaw(0)
-        self.frame_converter.setup_transform_function("airsim", self.config.save_format)
+        self.frame_converter.setup_transform_function("airsim", self.cfg.save_format)
 
         self.client = airsim.VehicleClient()
         self.client.confirmConnection()
 
-        # Sim config data
+        # Sim cfg data
         #######################################################
-        # RELEVANT CAMERA DATA
+        # RELEVANT CAMERA DATA (TODO: Adjust to the camera used)
         self.width = 512
         self.height = 512
         self.fov_h = 54.4
@@ -167,57 +180,68 @@ class AirsimSaver:
         self.client.simSetFocusDistance(100.0, "0")  # Avoids depth of field blur
         self.camera_params = CameraParams(self.width, self.height, self.cx, self.cy, self.fx, self.fy)
         #######################################################
+        
         # Set initial position
-        if self.config.origin_transform is None:
-            self.config.origin_transform = np.array([0, 0, 0])
-        if self.config.orientation_transform is None:
-            self.config.orientation_transform = 0
+        if self.cfg.origin_transform is None:
+            self.cfg.origin_transform = np.array([0, 0, 0])
+        if self.cfg.orientation_transform is None:
+            self.cfg.orientation_transform = 0
 
         # Set the data to query
         self.query_data = []
-        if "rgb" in self.config.sensors:
+        if "rgb" in self.cfg.data_types:
             self.query_data.append(airsim.ImageRequest("0", airsim.ImageType.Scene, False, False))
-        if "depth" in self.config.sensors:
+        if "depth" in self.cfg.data_types:
             self.query_data.append(airsim.ImageRequest("0", airsim.ImageType.DepthPerspective, True, False))
-        if "semantic" in self.config.sensors:
+        if "semantic" in self.cfg.data_types:
             self.query_data.append(airsim.ImageRequest("0", airsim.ImageType.Segmentation, False, False))
-
-        if "semantic" in self.config.sensors:
+        if "semantic" in self.cfg.data_types:
             self.setup_semantic_config()
 
         ### Configure the controller and saver
-        if self.config.mode == "live":
+        if self.cfg.mode == "live":
             # self.save = self.go_live
             raise NotImplementedError
-        elif self.config.mode == "from_poses":
-            # self.save = self.save_dataset_poses
-            raise NotImplementedError
-        elif self.config.mode == "from_function":
+        elif self.cfg.mode == "from_poses":
+            if self.cfg.poses_file is None:
+                raise ValueError("Please provide a path to the poses file.")
+            with open(self.cfg.poses_file, "rb") as f:
+                self.poses = []
+                for line in f.readlines():
+                    line = line.split()
+                    self.poses.append(line)
+            # Assign the method to save the data
+            self.save: Callable = self.save_dataset_poses
+
+        elif self.cfg.mode == "from_function":
             # Assign the function to generate poses
             self.function: BasePosesFunction = self._get_function()
-            # Assign the mehtod to save the data
+            # Assign the method to save the data
             self.save: Callable = self.save_dataset_function
 
         # Setup the saver
-        self.dataset_directory = self.config.save_dir / self.config.name
+        self.dataset_directory = self.cfg.save_dir / self.cfg.name
         self.saver = self._get_saver()
 
     def setup_semantic_config(self):
         # Set all objects in the scene to label 0 in the beggining
-        if self.config.semantic_config is not None:
-            for object_id in self.client.simListSceneObjects(): #type: ignore
-                changed = False
-                for object_str, label in self.config.semantic_config:
-                    if object_str in object_id:
-                        changed = True
-                        success = self.client.simSetSegmentationObjectID(object_id, label)
-                        if not success:
-                            print("Could not set segmentation object ID for {}".format(object_id))
-                        else:
-                            print("Changed object ID to {} for {}".format(label, object_id))
-                        break
-                if not changed:  # TODO: Check if this is faster than just setting all objects to 0
-                    self.client.simSetSegmentationObjectID(object_id, 0)
+        if self.cfg.semantic_config is not None:
+            # Set everything to ID 0 using regular expression
+            success = self.client.simSetSegmentationObjectID(".*", 0, True)
+
+            # To change the remaining we use the semantic config.
+            # For each label, we will create a regular expression 
+            # that matches all the objects containing the label as a substring
+            regexes = {}
+            for label, label_id in self.cfg.semantic_config:
+                if label not in regexes:
+                    regexes[label] = ".*" + label + ".*"
+                else:
+                    regexes[label] += "|.*" + label + ".*"
+            print("Setting object IDs")
+            for label, label_id in tqdm(self.cfg.semantic_config):
+                success = self.client.simSetSegmentationObjectID(regexes[label], label_id, True)
+                
             print("Finished setting object IDs")
 
     def process_airsim_data(
@@ -228,15 +252,15 @@ class AirsimSaver:
         """
         data = SaveData()
         # Get transform matrix from position-rotation in the specified frame
-        translation_colmap, rotation_colmap = self.frame_converter.ros_to_nerfstudio_pose(position, orientation)
+        translation_ros, rotation_ros = self.frame_converter.airsim_to_ros_pose(position, orientation)
         print("Position: {}".format(position))
-        print("Position colmap: {}".format(translation_colmap))
+        print("Position ros: {}".format(translation_ros))
         print("Orientation: {}".format(orientation.as_matrix()))
-        print("Orientation colmap: {}".format(rotation_colmap.as_matrix()))
-        rot_matrix_colmap = rotation_colmap.as_matrix()
+        print("Orientation ros: {}".format(rotation_ros.as_matrix()))
+        rot_matrix_colmap = rotation_ros.as_matrix()
         transform_matrix = np.eye(4)
         transform_matrix[:3, :3] = rot_matrix_colmap
-        transform_matrix[:3, 3] = translation_colmap
+        transform_matrix[:3, 3] = translation_ros
         data.pose = transform_matrix
 
         for response in responses:
@@ -262,7 +286,8 @@ class AirsimSaver:
                 img_rgb_airsim = img_data.reshape(response.height, response.width, 3)
                 np_rgb_airsim = img_rgb_airsim[:,:,::-1]
                 # Get the semantic image
-                semantic = airsim2class_id(np_rgb_airsim)
+                airsim_colormap = get_airsim_labels()
+                semantic = rgb2label(np_rgb_airsim, airsim_colormap)
                 data.semantic = semantic
 
         return data
@@ -294,6 +319,43 @@ class AirsimSaver:
 
         self.saver.save_frame(idx, data)
 
+    def save_dataset_poses(self):
+        """
+        Save the dataset from poses.
+        """
+        exposure_adjust = False
+        for id, pose_list in enumerate(self.poses):
+
+            # Move to pose
+            airsim_pose = airsim.Pose(
+                airsim.Vector3r(x_val=float(pose_list[0]), y_val=float(pose_list[1]), z_val=float(pose_list[2])),
+                airsim.Quaternionr(
+                    x_val=float(pose_list[3]),
+                    y_val=float(pose_list[4]),
+                    z_val=float(pose_list[5]),
+                    w_val=float(pose_list[6]),
+                ),
+            )
+
+            self.client.simSetVehiclePose(airsim_pose, True)
+
+            # Get images
+            responses = self.client.simGetImages(self.query_data)
+
+            data = self.process_airsim_data(
+                np.array([float(pose_list[0]), float(pose_list[1]), float(pose_list[2])]),
+                Rotation.from_quat([float(pose_list[3]), float(pose_list[4]), float(pose_list[5]), float(pose_list[6])]),
+                responses,
+            )
+            if not exposure_adjust:
+                # Wait to adjust exposure
+                time.sleep(2)
+                exposure_adjust = True
+                
+            self.saver.save_frame(id, data)
+
+        self.saver.post_setup()
+
     def save_dataset_function(self):
         """
         Save the dataset from a function.
@@ -305,13 +367,13 @@ class AirsimSaver:
             translation_airsim, rotation_airsim = self.frame_converter.ros_to_airsim_pose(positions[i], orientations[i])
 
             # Apply orientation offset (pre-multiplication!) TODO: Add offsets to frame converter
-            if self.config.orientation_transform is not None:
-                orientation_transform = Rotation.from_euler("z", self.config.orientation_transform, degrees=True)
+            if self.cfg.orientation_transform is not None:
+                orientation_transform = Rotation.from_euler("z", self.cfg.orientation_transform, degrees=True)
             else:
                 orientation_transform = Rotation.identity()
             rotation_airsim_yaw_corrected =  rotation_airsim * orientation_transform
             quaternion_airsim = rotation_airsim_yaw_corrected.as_quat()  # Scipy quat uses: xyzw
-            translation_airsim_offset_corrected = translation_airsim + self.config.origin_transform
+            translation_airsim_offset_corrected = translation_airsim + self.cfg.origin_transform
             translation_airsim_vector = airsim.Vector3r(
                 x_val=translation_airsim_offset_corrected[0], y_val=translation_airsim_offset_corrected[1], z_val=translation_airsim_offset_corrected[2]
             )
